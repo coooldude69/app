@@ -131,6 +131,7 @@ if filtered.empty:
 st.success(f"✅ Found **{len(filtered)}** RO(s)")
 
 # ---------------- RO SELECTION ----------------
+# ---------------- RO SELECTION ----------------
 st.markdown("### 🏢 Select Retail Outlet")
 
 # Compact display
@@ -142,7 +143,13 @@ ro_display = (
 
 sel_ro = st.selectbox("Select RO", options=ro_display, label_visibility="collapsed")
 
-sel_sap = sel_ro.split("|"),[object Object],strip() if "|" in sel_ro else sel_ro.split("SAP:")[-1].split("|"),[object Object],strip()
+# Extract SAP code properly
+if "|" in sel_ro:
+    parts = sel_ro.split("|")
+    sel_sap = parts,[object Object],strip() if len(parts) > 1 else parts,[object Object],strip()
+else:
+    sel_sap = sel_ro.strip()
+
 ro_row = filtered[filtered["SAP Code"].astype(str) == sel_sap]
 
 if ro_row.empty:
@@ -331,4 +338,5 @@ with map_tab2:
 # ---------------- FOOTER ----------------
 st.markdown("---")
 st.caption("💡 **Tip:** Use landscape mode on mobile for better chart visibility | Data refreshed on upload")
+
 
