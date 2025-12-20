@@ -3,7 +3,6 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
-import pydeck as pdk
 
 # ---------------- BASIC CONFIG ----------------
 st.set_page_config(
@@ -26,11 +25,11 @@ def get_yoy_cols(df):
     hsd_yoy = sorted(set(hsd_yoy), key=lambda x: x)
     return ms_yoy, hsd_yoy
 
-def format_number(val):
+def format_number(val, decimals=1):
     if pd.isna(val):
         return "NA"
     try:
-        return f"{val:,.1f}"
+        return f"{val:,.{decimals}f}"
     except Exception:
         return str(val)
 
@@ -57,13 +56,12 @@ if "file_name" not in st.session_state:
 st.title("RO Performance & Location Dashboard")
 
 st.caption(
-    "Upload the latest **SALES-TILL-NOV.xlsx** once per session and analyse any RO "
-    "with last 3/6 month KPIs and detailed map. Optimised for mobile."
+    "Upload the latest **SALES-TILL-NOV.xlsx** once per session. "
+    "Analyse any RO with last 3/6 month KPIs and map. Layout is compact for mobile screens."
 )
 
-# File uploader with persistence
 uploaded_file = st.file_uploader(
-    "Upload SALES-TILL-NOV.xlsx (will stay loaded until you upload a new file)",
+    "Upload SALES-TILL-NOV.xlsx (stays loaded until you upload a new file)",
     type=["xlsx"]
 )
 
@@ -76,7 +74,6 @@ if st.session_state.df is None:
     st.stop()
 
 df = st.session_state.df
-
 st.caption(f"Current file: **{st.session_state.file_name}**")
 
 # Basic validation
@@ -175,7 +172,7 @@ with snap2:
         f"NH / CC-DC: {ro_row.get('New NH', '')} / {ro_row.get('CC/DC', '')}"
     )
 
-# ---------------- KPIs: LAST 3 MONTHS ----------------
+# ---------------- KPIs: TABLE (LAST 3 MONTHS) ----------------
 st.markdown("### MS / HSD KPIs (Last 3 Calendar Months)")
 
 ms_latest = ro_row.get("MS2526", np.nan)
@@ -217,29 +214,46 @@ else:
 ms_3m_avg = sum(ms_last3_vals) / 3 if ms_last3_vals else 0.0
 hsd_3m_avg = sum(hsd_last3_vals) / 3 if hsd_last3_vals else 0.0
 
-k1, k2 = st.columns(2)
+kpi_table = pd.DataFrame({
+    "Metric": [
+        "MS 25-26 (KL)",
+        "HSD 25-26 (KL)",
+        "TY MS+HSD (KL)",
+        "Last Month MS (KL)",
+        "Last Month HSD (KL)",
+        "3M Avg MS (KL)",
+        "3M Avg HSD (KL)",
+        "MS Historical (KL)",
+        "HSD Historical (KL)",
+        "Peak MS (KL)",
+        "Peak HSD (KL)",
+    ],
+    "Value": [
+        format_number(ms_latest),
+        format_number(hsd_latest),
+        format_number(ty),
+        format_number(last_ms),
+        format_number(last_hsd),
+        format_number(ms_3m_avg),
+        format_number(hsd_3m_avg),
+        format_number(ms_hist),
+        format_number(hsd_hist),
+        format_number(ms_peak),
+        format_number(hsd_peak),
+    ],
+})
 
-with k1:
-    st.metric("MS 25-26 (KL)", format_number(ms_latest))
-    st.metric("TY MS+HSD (KL)", format_number(ty))
-    st.metric("Last Month MS (KL)", format_number(last_ms))
-
-with k2:
-    st.metric("HSD 25-26 (KL)", format_number(hsd_latest))
-    st.metric("Last Month HSD (KL)", format_number(last_hsd))
-    st.metric("3M Avg MS / HSD (KL)",
-              f"{format_number(ms_3m_avg)}/{format_number(hsd_3m_avg)}")
-
-st.caption(
-    f"Reference 3‑month window: "
-    f"**{m3_labels[0]} – {m3_labels[-1]}** (last completed calendar months before today)."
+st.dataframe(
+    kpi_table,
+    use_container_width=True,
+    hide_index=True,
 )
 
-st.markdown(
-    f"Historical & peaks: MS Hist {format_number(ms_hist)}, "
-    f"HSD Hist {format_number(hsd_hist)}, "
-    f"Peak MS {format_number(ms_peak)}, Peak HSD {format_number(hsd_peak)}"
-)
+if m3_labels:
+    st.caption(
+        f"Reference 3‑month window: **{m3_labels[0]} – {m3_labels[-1]}** "
+        f"(last completed calendar months before today)."
+    )
 
 # ---------------- TRENDS: LAST 6 MONTHS ----------------
 st.markdown("### Trends (Last 6 Calendar Months)")
@@ -294,95 +308,30 @@ with trend_col2:
     else:
         st.info("YoY MS/HSD columns not found in file.")
 
-# ---------------- MAPS (DETAILED) ----------------
-st.markdown("### Map View (Detailed)")
+# ---------------- MAPS (SIMPLE BUT STABLE) ----------------
+st.markdown("### Map View")
 
-# Selected RO map with tooltip
-lat = ro_row.get("Latitude", np.nan)
-lon = ro_row.get("Longitude", np.nan)
+m1, m2 = st.columns(2)
 
-if pd.notna(lat) and pd.notna(lon):
-    selected_df = pd.DataFrame({
-        "lat": [lat],
-        "lon": [lon],
-        "RO Name": [ro_row.get("RO Name", "")],
-        "District": [ro_row.get("District", "")],
-        "TY_MS_HSD": [ty if not pd.isna(ty) else 0.0],
-    })
+with m1:
+    st.caption("Selected RO")
+    lat = ro_row.get("Latitude", np.nan)
+    lon = ro_row.get("Longitude", np.nan)
 
-    view_state = pdk.ViewState(
-        latitude=lat,
-        longitude=lon,
-        zoom=12,
-        pitch=30,
-    )
-
-    layer_selected = pdk.Layer(
-        "ScatterplotLayer",
-        data=selected_df,
-        get_position=["lon", "lat"],
-        get_radius=800,
-        get_fill_color=[255, 0, 0, 200],
-        pickable=True,
-    )
-
-    tooltip = {
-        "text": "{RO Name}\nDistrict: {District}\nTY MS+HSD: {TY_MS_HSD}"
-    }
-
-    st.pydeck_chart(
-        pdk.Deck(
-            layers=[layer_selected],
-            initial_view_state=view_state,
-            tooltip=tooltip,
-            map_style="mapbox://styles/mapbox/streets-v11",
-        )
-    )
-else:
-    st.info("No coordinates for this RO.")
-
-st.markdown("#### All Filtered ROs")
-
-if "Latitude" in filtered.columns and "Longitude" in filtered.columns:
-    map_filtered = filtered.dropna(subset=["Latitude", "Longitude"]).copy()
-    if not map_filtered.empty:
-        map_filtered["TY_MS_HSD"] = (
-            map_filtered.get("TY MS+ HSD")
-            .fillna(0)
-            .astype(float)
-        )
-        center_lat = map_filtered["Latitude"].astype(float).mean()
-        center_lon = map_filtered["Longitude"].astype(float).mean()
-
-        view_state_all = pdk.ViewState(
-            latitude=center_lat,
-            longitude=center_lon,
-            zoom=8,
-            pitch=0,
-        )
-
-        layer_all = pdk.Layer(
-            "ScatterplotLayer",
-            data=map_filtered,
-            get_position=["Longitude", "Latitude"],
-            get_radius=1000,
-            get_fill_color=[0, 120, 255, 160],
-            pickable=True,
-        )
-
-        tooltip_all = {
-            "text": "{RO Name}\nDistrict: {District}\nTY MS+HSD: {TY_MS_HSD}"
-        }
-
-        st.pydeck_chart(
-            pdk.Deck(
-                layers=[layer_all],
-                initial_view_state=view_state_all,
-                tooltip=tooltip_all,
-                map_style="mapbox://styles/mapbox/light-v9",
-            )
-        )
+    if pd.notna(lat) and pd.notna(lon):
+        map_df = pd.DataFrame({"lat": [lat], "lon": [lon]})
+        st.map(map_df, size=20)
     else:
-        st.info("No coordinates for filtered ROs.")
-else:
-    st.info("Latitude/Longitude columns not found in file.")
+        st.info("No coordinates for this RO.")
+
+with m2:
+    st.caption("All filtered ROs")
+    if "Latitude" in filtered.columns and "Longitude" in filtered.columns:
+        map_filtered = filtered.dropna(subset=["Latitude", "Longitude"]).copy()
+        if not map_filtered.empty:
+            map_filtered = map_filtered.rename(columns={"Latitude": "lat", "Longitude": "lon"})
+            st.map(map_filtered[["lat", "lon"]], size=10)
+        else:
+            st.info("No coordinates for filtered ROs.")
+    else:
+        st.info("Latitude/Longitude columns not found in file.")
