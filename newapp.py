@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
+import pydeck as pdk
 
 # ---------------- BASIC CONFIG ----------------
 st.set_page_config(
@@ -17,15 +18,6 @@ def load_data_from_file(file):
     df = pd.read_excel(file, sheet_name="Sheet1", engine="openpyxl")
     df = df.rename(columns=lambda c: str(c).strip())
     return df
-
-def get_month_cols(df):
-    ms_cols = [c for c in df.columns if isinstance(c, str) and c.startswith("M0")] + \
-              [c for c in df.columns if isinstance(c, str) and c.startswith("M1")]
-    h_cols = [c for c in df.columns if isinstance(c, str) and c.startswith("H0")] + \
-             [c for c in df.columns if isinstance(c, str) and c.startswith("H1")]
-    ms_cols = sorted(set(ms_cols), key=lambda x: x)
-    h_cols = sorted(set(h_cols), key=lambda x: x)
-    return ms_cols, h_cols
 
 def get_yoy_cols(df):
     ms_yoy = [c for c in df.columns if isinstance(c, str) and c.startswith("MS") and len(c) == 6]
@@ -43,16 +35,11 @@ def format_number(val):
         return str(val)
 
 def month_col_labels_last_n(n, today=None):
-    """
-    Returns lists of MS and HSD column names for last n calendar months
-    immediately before today. Example: today = Dec 2025, n=3 ->
-    MS: [M0925, M1025, M1125], HSD: [H0925, H1025, H1125].
-    """
+    """Last n full calendar months before today."""
     if today is None:
         today = datetime.today()
     labels_m = []
     labels_h = []
-    # previous n full months (exclude current month)
     for i in range(n, 0, -1):
         d = today - relativedelta(months=i)
         mm = f"{d.month:02d}"
@@ -61,22 +48,36 @@ def month_col_labels_last_n(n, today=None):
         labels_h.append(f"H{mm}{yy}")
     return labels_m, labels_h
 
-# ---------------- HEADER ----------------
+# ---------------- SESSION STATE: DATA PERSISTENCE ----------------
+if "df" not in st.session_state:
+    st.session_state.df = None
+if "file_name" not in st.session_state:
+    st.session_state.file_name = None
+
 st.title("RO Performance & Location Dashboard")
 
 st.caption(
-    "Upload the latest **SALES-TILL-NOV.xlsx** and analyse any RO with KPIs, "
-    "last 3/6 month trends and map view. Optimised for mobile: use the search bar to jump to an outlet."
+    "Upload the latest **SALES-TILL-NOV.xlsx** once per session and analyse any RO "
+    "with last 3/6 month KPIs and detailed map. Optimised for mobile."
 )
 
-# ---------------- FILE UPLOAD ----------------
-file = st.file_uploader("Upload SALES-TILL-NOV.xlsx", type=["xlsx"])
+# File uploader with persistence
+uploaded_file = st.file_uploader(
+    "Upload SALES-TILL-NOV.xlsx (will stay loaded until you upload a new file)",
+    type=["xlsx"]
+)
 
-if file is None:
-    st.info("Upload the latest Excel file to begin.")
+if uploaded_file is not None:
+    st.session_state.df = load_data_from_file(uploaded_file)
+    st.session_state.file_name = uploaded_file.name
+
+if st.session_state.df is None:
+    st.info("Upload the Excel file to start the analysis.")
     st.stop()
 
-df = load_data_from_file(file)
+df = st.session_state.df
+
+st.caption(f"Current file: **{st.session_state.file_name}**")
 
 # Basic validation
 required_cols = ["RO Name", "SAP Code"]
@@ -87,28 +88,27 @@ if missing:
 
 df = df.dropna(subset=["RO Name", "SAP Code"])
 
-# ---------------- TOP BAR: SEARCH + FILTERS ----------------
+# ---------------- SEARCH & FILTERS ----------------
 st.markdown("### Search & Filters")
 
-t1, t2, t3 = st.columns([2.5, 1.2, 1.2])
+search_col, filt_col = st.columns([2.5, 1.5])
 
-with t1:
+with search_col:
     search_text = st.text_input(
-        "Search RO (name / SAP / TA / District)",
+        "Search RO (Name / SAP / TA / District)",
         value="",
         placeholder="e.g. BALASORE, 143302, NH-5A, KENDRAPARA",
     )
 
-districts = (["All"] +
-             sorted(df["District"].dropna().astype(str).unique().tolist())
-             ) if "District" in df.columns else ["All"]
-ta_names = (["All"] +
-            sorted(df["Trading Area Name"].dropna().astype(str).unique().tolist())
-            ) if "Trading Area Name" in df.columns else ["All"]
+with filt_col:
+    districts = (["All"] +
+                 sorted(df["District"].dropna().astype(str).unique().tolist())
+                 ) if "District" in df.columns else ["All"]
+    ta_names = (["All"] +
+                sorted(df["Trading Area Name"].dropna().astype(str).unique().tolist())
+                ) if "Trading Area Name" in df.columns else ["All"]
 
-with t2:
     sel_district = st.selectbox("District", options=districts)
-with t3:
     sel_ta = st.selectbox("Trading Area", options=ta_names)
 
 filtered = df.copy()
@@ -157,9 +157,9 @@ ro_row = ro_row.iloc[0]
 # ---------------- RO SNAPSHOT ----------------
 st.markdown("### RO Snapshot")
 
-c1, c2 = st.columns(2)
+snap1, snap2 = st.columns(2)
 
-with c1:
+with snap1:
     st.markdown(
         f"**{ro_row.get('RO Name', '')}**  \n"
         f"SAP: {ro_row.get('SAP Code', '')}  \n"
@@ -167,7 +167,7 @@ with c1:
         f"Active: {ro_row.get('Active(Y/N)', '')}"
     )
 
-with c2:
+with snap2:
     st.markdown(
         f"District: {ro_row.get('District', '')}  \n"
         f"Trading Area: {ro_row.get('Trading Area Name', '')}  \n"
@@ -175,7 +175,7 @@ with c2:
         f"NH / CC-DC: {ro_row.get('New NH', '')} / {ro_row.get('CC/DC', '')}"
     )
 
-# ---------------- KPIs SECTION ----------------
+# ---------------- KPIs: LAST 3 MONTHS ----------------
 st.markdown("### MS / HSD KPIs (Last 3 Calendar Months)")
 
 ms_latest = ro_row.get("MS2526", np.nan)
@@ -186,7 +186,6 @@ hsd_peak = ro_row.get("Peak Consumption HSD", np.nan)
 ms_hist = ro_row.get("MS Historical", np.nan)
 hsd_hist = ro_row.get("HSD Historical", np.nan)
 
-# Determine last 3 calendar month columns
 m3_labels, h3_labels = month_col_labels_last_n(3)
 
 ms_last3_vals = []
@@ -218,34 +217,33 @@ else:
 ms_3m_avg = sum(ms_last3_vals) / 3 if ms_last3_vals else 0.0
 hsd_3m_avg = sum(hsd_last3_vals) / 3 if hsd_last3_vals else 0.0
 
-k1, k2, k3, k4 = st.columns(4)
+k1, k2 = st.columns(2)
 
 with k1:
     st.metric("MS 25-26 (KL)", format_number(ms_latest))
-    st.metric("HSD 25-26 (KL)", format_number(hsd_latest))
-
-with k2:
     st.metric("TY MS+HSD (KL)", format_number(ty))
     st.metric("Last Month MS (KL)", format_number(last_ms))
 
-with k3:
+with k2:
+    st.metric("HSD 25-26 (KL)", format_number(hsd_latest))
     st.metric("Last Month HSD (KL)", format_number(last_hsd))
-    st.metric("3M Avg MS (KL)", format_number(ms_3m_avg))
+    st.metric("3M Avg MS / HSD (KL)",
+              f"{format_number(ms_3m_avg)}/{format_number(hsd_3m_avg)}")
 
-with k4:
-    st.metric("3M Avg HSD (KL)", format_number(hsd_3m_avg))
-    st.metric("MS/HSD Hist. (KL)", f"{format_number(ms_hist)} / {format_number(hsd_hist)}")
+st.caption(
+    f"Reference 3‑month window: "
+    f"**{m3_labels[0]} – {m3_labels[-1]}** (last completed calendar months before today)."
+)
 
-if last_month_label:
-    st.caption(
-        f"Reference 3‑month window: **{m3_labels[0]} – {m3_labels[-1]}** "
-        f"(last completed calendar months before today)."
-    )
+st.markdown(
+    f"Historical & peaks: MS Hist {format_number(ms_hist)}, "
+    f"HSD Hist {format_number(hsd_hist)}, "
+    f"Peak MS {format_number(ms_peak)}, Peak HSD {format_number(hsd_peak)}"
+)
 
-# ---------------- TRENDS SECTION ----------------
+# ---------------- TRENDS: LAST 6 MONTHS ----------------
 st.markdown("### Trends (Last 6 Calendar Months)")
 
-# Determine columns for last 6 calendar months
 m6_labels, h6_labels = month_col_labels_last_n(6)
 
 ms_vals_6 = []
@@ -270,14 +268,14 @@ ts6 = pd.DataFrame({
     "HSD": hsd_vals_6,
 })
 
-t_col1, t_col2 = st.columns(2)
+trend_col1, trend_col2 = st.columns(2)
 
-with t_col1:
+with trend_col1:
     st.caption("Monthly MS / HSD (last 6 calendar months)")
     ts_long = ts6.melt("Month", var_name="Product", value_name="Volume")
     st.line_chart(ts_long, x="Month", y="Volume", color="Product")
 
-with t_col2:
+with trend_col2:
     st.caption("Year-on-Year MS / HSD")
     ms_yoy, hsd_yoy = get_yoy_cols(df)
     yoy_rows = []
@@ -296,34 +294,95 @@ with t_col2:
     else:
         st.info("YoY MS/HSD columns not found in file.")
 
-# ---------------- MAP SECTION ----------------
-st.markdown("### Map View")
+# ---------------- MAPS (DETAILED) ----------------
+st.markdown("### Map View (Detailed)")
 
-m1, m2 = st.columns(2)
+# Selected RO map with tooltip
+lat = ro_row.get("Latitude", np.nan)
+lon = ro_row.get("Longitude", np.nan)
 
-with m1:
-    st.caption("Selected RO")
-    lat = ro_row.get("Latitude", np.nan)
-    lon = ro_row.get("Longitude", np.nan)
+if pd.notna(lat) and pd.notna(lon):
+    selected_df = pd.DataFrame({
+        "lat": [lat],
+        "lon": [lon],
+        "RO Name": [ro_row.get("RO Name", "")],
+        "District": [ro_row.get("District", "")],
+        "TY_MS_HSD": [ty if not pd.isna(ty) else 0.0],
+    })
 
-    if pd.notna(lat) and pd.notna(lon):
-        map_df = pd.DataFrame({
-            "lat": [lat],
-            "lon": [lon],
-            "name": [ro_row.get("RO Name", "")]
-        })
-        st.map(map_df, size=18)
+    view_state = pdk.ViewState(
+        latitude=lat,
+        longitude=lon,
+        zoom=12,
+        pitch=30,
+    )
+
+    layer_selected = pdk.Layer(
+        "ScatterplotLayer",
+        data=selected_df,
+        get_position=["lon", "lat"],
+        get_radius=800,
+        get_fill_color=[255, 0, 0, 200],
+        pickable=True,
+    )
+
+    tooltip = {
+        "text": "{RO Name}\nDistrict: {District}\nTY MS+HSD: {TY_MS_HSD}"
+    }
+
+    st.pydeck_chart(
+        pdk.Deck(
+            layers=[layer_selected],
+            initial_view_state=view_state,
+            tooltip=tooltip,
+            map_style="mapbox://styles/mapbox/streets-v11",
+        )
+    )
+else:
+    st.info("No coordinates for this RO.")
+
+st.markdown("#### All Filtered ROs")
+
+if "Latitude" in filtered.columns and "Longitude" in filtered.columns:
+    map_filtered = filtered.dropna(subset=["Latitude", "Longitude"]).copy()
+    if not map_filtered.empty:
+        map_filtered["TY_MS_HSD"] = (
+            map_filtered.get("TY MS+ HSD")
+            .fillna(0)
+            .astype(float)
+        )
+        center_lat = map_filtered["Latitude"].astype(float).mean()
+        center_lon = map_filtered["Longitude"].astype(float).mean()
+
+        view_state_all = pdk.ViewState(
+            latitude=center_lat,
+            longitude=center_lon,
+            zoom=8,
+            pitch=0,
+        )
+
+        layer_all = pdk.Layer(
+            "ScatterplotLayer",
+            data=map_filtered,
+            get_position=["Longitude", "Latitude"],
+            get_radius=1000,
+            get_fill_color=[0, 120, 255, 160],
+            pickable=True,
+        )
+
+        tooltip_all = {
+            "text": "{RO Name}\nDistrict: {District}\nTY MS+HSD: {TY_MS_HSD}"
+        }
+
+        st.pydeck_chart(
+            pdk.Deck(
+                layers=[layer_all],
+                initial_view_state=view_state_all,
+                tooltip=tooltip_all,
+                map_style="mapbox://styles/mapbox/light-v9",
+            )
+        )
     else:
-        st.info("No coordinates for this RO.")
-
-with m2:
-    st.caption("All filtered ROs")
-    if "Latitude" in filtered.columns and "Longitude" in filtered.columns:
-        map_filtered = filtered.dropna(subset=["Latitude", "Longitude"]).copy()
-        if not map_filtered.empty:
-            map_filtered = map_filtered.rename(columns={"Latitude": "lat", "Longitude": "lon"})
-            st.map(map_filtered[["lat", "lon"]], size=10)
-        else:
-            st.info("No coordinates for filtered ROs.")
-    else:
-        st.info("Latitude/Longitude not found in file.")
+        st.info("No coordinates for filtered ROs.")
+else:
+    st.info("Latitude/Longitude columns not found in file.")
