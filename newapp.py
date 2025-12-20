@@ -331,3 +331,4 @@ with map_tab2:
 # ---------------- FOOTER ----------------
 st.markdown("---")
 st.caption("💡 **Tip:** Use landscape mode on mobile for better chart visibility | Data refreshed on upload")
+
