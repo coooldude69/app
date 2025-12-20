@@ -1,6 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
 
 # ---------------- BASIC CONFIG ----------------
 st.set_page_config(
@@ -40,47 +42,31 @@ def format_number(val):
     except Exception:
         return str(val)
 
-def build_last_n_months_ts(row, ms_cols, h_cols, n=6):
+def month_col_labels_last_n(n, today=None):
     """
-    For one RO, build a dataframe with last n months of MS/HSD.
-    Uses the last column index where either MS or HSD is non-null.
+    Returns lists of MS and HSD column names for last n calendar months
+    immediately before today. Example: today = Dec 2025, n=3 ->
+    MS: [M0925, M1025, M1125], HSD: [H0925, H1025, H1125].
     """
-    if not ms_cols or not h_cols:
-        return None
-
-    # Use only columns that exist for both MS and HSD so Month axis aligns
-    shared = [c for c in ms_cols if c in h_cols]
-    if not shared:
-        return None
-
-    ms_series = row[shared]
-    hsd_series = row[shared]
-
-    # month is valid if either MS or HSD has data
-    valid_mask = (~ms_series.isna()) | (~hsd_series.isna())
-    if not valid_mask.any():
-        return None
-
-    last_idx = np.where(valid_mask.values)[-1][-1]
-    start_idx = max(0, last_idx - (n - 1))
-
-    sel_cols = shared[start_idx:last_idx + 1]
-    ms_last = ms_series[sel_cols].fillna(0)
-    hsd_last = hsd_series[sel_cols].fillna(0)
-
-    ts = pd.DataFrame({
-        "Month": sel_cols,
-        "MS": ms_last.values,
-        "HSD": hsd_last.values
-    })
-    return ts
+    if today is None:
+        today = datetime.today()
+    labels_m = []
+    labels_h = []
+    # previous n full months (exclude current month)
+    for i in range(n, 0, -1):
+        d = today - relativedelta(months=i)
+        mm = f"{d.month:02d}"
+        yy = str(d.year)[-2:]
+        labels_m.append(f"M{mm}{yy}")
+        labels_h.append(f"H{mm}{yy}")
+    return labels_m, labels_h
 
 # ---------------- HEADER ----------------
 st.title("RO Performance & Location Dashboard")
 
 st.caption(
-    "Upload the latest **SALES-TILL-NOV.xlsx** and analyse any RO with KPIs, trends and map view. "
-    "Optimised for mobile: use the search bar to jump to an outlet."
+    "Upload the latest **SALES-TILL-NOV.xlsx** and analyse any RO with KPIs, "
+    "last 3/6 month trends and map view. Optimised for mobile: use the search bar to jump to an outlet."
 )
 
 # ---------------- FILE UPLOAD ----------------
@@ -135,13 +121,13 @@ if sel_ta != "All" and "Trading Area Name" in df.columns:
 if search_text:
     s = search_text.strip()
     mask = (
-        df["RO Name"].astype(str).str.contains(s, case=False, na=False)
-        | df["SAP Code"].astype(str).str.contains(s, case=False, na=False)
+        filtered["RO Name"].astype(str).str.contains(s, case=False, na=False)
+        | filtered["SAP Code"].astype(str).str.contains(s, case=False, na=False)
     )
-    if "Trading Area Name" in df.columns:
-        mask |= df["Trading Area Name"].astype(str).str.contains(s, case=False, na=False)
-    if "District" in df.columns:
-        mask |= df["District"].astype(str).str.contains(s, case=False, na=False)
+    if "Trading Area Name" in filtered.columns:
+        mask |= filtered["Trading Area Name"].astype(str).str.contains(s, case=False, na=False)
+    if "District" in filtered.columns:
+        mask |= filtered["District"].astype(str).str.contains(s, case=False, na=False)
     filtered = filtered[mask]
 
 if filtered.empty:
@@ -190,34 +176,47 @@ with c2:
     )
 
 # ---------------- KPIs SECTION ----------------
-st.markdown("### MS / HSD KPIs")
+st.markdown("### MS / HSD KPIs (Last 3 Calendar Months)")
 
 ms_latest = ro_row.get("MS2526", np.nan)
 hsd_latest = ro_row.get("HSD2526", np.nan)
 ty = ro_row.get("TY MS+ HSD", np.nan)
-ms_avg = ro_row.get("MS(AVG2526)", np.nan)
-hsd_avg = ro_row.get("HSD(AVG2526)", np.nan)
 ms_peak = ro_row.get("Peak Consumption MS", np.nan)
 hsd_peak = ro_row.get("Peak Consumption HSD", np.nan)
 ms_hist = ro_row.get("MS Historical", np.nan)
 hsd_hist = ro_row.get("HSD Historical", np.nan)
 
-# Build last 6 months time series for extra KPIs
-ms_cols, h_cols = get_month_cols(df)
-ts_last6 = build_last_n_months_ts(ro_row, ms_cols, h_cols, n=6)
+# Determine last 3 calendar month columns
+m3_labels, h3_labels = month_col_labels_last_n(3)
 
-last_month_label = last_ms = last_hsd = None
-ms_3m_avg = hsd_3m_avg = np.nan
+ms_last3_vals = []
+hsd_last3_vals = []
 
-if ts_last6 is not None and not ts_last6.empty:
-    last_row = ts_last6.iloc[-1]
-    last_month_label = last_row["Month"]
-    last_ms = last_row["MS"]
-    last_hsd = last_row["HSD"]
+for m_col, h_col in zip(m3_labels, h3_labels):
+    ms_val = ro_row.get(m_col, 0.0)
+    hsd_val = ro_row.get(h_col, 0.0)
+    try:
+        ms_val = float(ms_val)
+    except Exception:
+        ms_val = 0.0
+    try:
+        hsd_val = float(hsd_val)
+    except Exception:
+        hsd_val = 0.0
+    ms_last3_vals.append(ms_val)
+    hsd_last3_vals.append(hsd_val)
 
-    if len(ts_last6) >= 3:
-        ms_3m_avg = ts_last6["MS"].tail(3).mean()
-        hsd_3m_avg = ts_last6["HSD"].tail(3).mean()
+if m3_labels:
+    last_month_label = m3_labels[-1]
+    last_ms = ms_last3_vals[-1]
+    last_hsd = hsd_last3_vals[-1]
+else:
+    last_month_label = None
+    last_ms = 0.0
+    last_hsd = 0.0
+
+ms_3m_avg = sum(ms_last3_vals) / 3 if ms_last3_vals else 0.0
+hsd_3m_avg = sum(hsd_last3_vals) / 3 if hsd_last3_vals else 0.0
 
 k1, k2, k3, k4 = st.columns(4)
 
@@ -227,35 +226,56 @@ with k1:
 
 with k2:
     st.metric("TY MS+HSD (KL)", format_number(ty))
-    st.metric("Last Month MS (KL)",
-              format_number(last_ms) if last_ms is not None else "NA")
+    st.metric("Last Month MS (KL)", format_number(last_ms))
 
 with k3:
-    st.metric("Last Month HSD (KL)",
-              format_number(last_hsd) if last_hsd is not None else "NA")
-    st.metric("3M Avg MS (KL)",
-              format_number(ms_3m_avg) if not pd.isna(ms_3m_avg) else "NA")
+    st.metric("Last Month HSD (KL)", format_number(last_hsd))
+    st.metric("3M Avg MS (KL)", format_number(ms_3m_avg))
 
 with k4:
-    st.metric("3M Avg HSD (KL)",
-              format_number(hsd_3m_avg) if not pd.isna(hsd_3m_avg) else "NA")
+    st.metric("3M Avg HSD (KL)", format_number(hsd_3m_avg))
     st.metric("MS/HSD Hist. (KL)", f"{format_number(ms_hist)} / {format_number(hsd_hist)}")
 
-if last_month_label is not None:
-    st.caption(f"Last month plotted: **{last_month_label}**")
+if last_month_label:
+    st.caption(
+        f"Reference 3‑month window: **{m3_labels[0]} – {m3_labels[-1]}** "
+        f"(last completed calendar months before today)."
+    )
 
 # ---------------- TRENDS SECTION ----------------
-st.markdown("### Trends (Last 6 Months)")
+st.markdown("### Trends (Last 6 Calendar Months)")
+
+# Determine columns for last 6 calendar months
+m6_labels, h6_labels = month_col_labels_last_n(6)
+
+ms_vals_6 = []
+hsd_vals_6 = []
+for m_col, h_col in zip(m6_labels, h6_labels):
+    ms_val = ro_row.get(m_col, 0.0)
+    hsd_val = ro_row.get(h_col, 0.0)
+    try:
+        ms_val = float(ms_val)
+    except Exception:
+        ms_val = 0.0
+    try:
+        hsd_val = float(hsd_val)
+    except Exception:
+        hsd_val = 0.0
+    ms_vals_6.append(ms_val)
+    hsd_vals_6.append(hsd_val)
+
+ts6 = pd.DataFrame({
+    "Month": m6_labels,
+    "MS": ms_vals_6,
+    "HSD": hsd_vals_6,
+})
 
 t_col1, t_col2 = st.columns(2)
 
 with t_col1:
-    st.caption("Monthly MS / HSD (last 6 non-empty months)")
-    if ts_last6 is not None and not ts_last6.empty:
-        ts_long = ts_last6.melt("Month", var_name="Product", value_name="Volume")
-        st.line_chart(ts_long, x="Month", y="Volume", color="Product")
-    else:
-        st.info("No recent monthly MS/HSD data available for this RO.")
+    st.caption("Monthly MS / HSD (last 6 calendar months)")
+    ts_long = ts6.melt("Month", var_name="Product", value_name="Volume")
+    st.line_chart(ts_long, x="Month", y="Volume", color="Product")
 
 with t_col2:
     st.caption("Year-on-Year MS / HSD")
