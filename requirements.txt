@@ -3,3 +3,6 @@ pandas
 openpyxl
 numpy
 python-dateutil
+plotly
+scikit-learn
+scipy
