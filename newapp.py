@@ -22,7 +22,8 @@ PORTAL_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=DM+Mono:wght@400;500&display=swap');
 
 html, body, [class*="css"] { font-family: 'DM Sans', sans-serif; color: #0f172a; }
-#MainMenu, footer, header { visibility: hidden; }
+#MainMenu, footer { visibility: hidden; }
+header
 .block-container { padding: 0 2rem 2rem 2rem !important; max-width: 1440px !important; }
 
 /* ── Portal Header ── */
